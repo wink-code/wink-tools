@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>设备实时监控</title>
+    <!-- 引入ECharts库 -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .data-panel {
+            width: 400px;
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        .chart-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .chart {
+            height: 300px;
+            border: 1px solid #eee;
+            border-radius: 8px;
+        }
+        pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        h2 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <h1>设备实时监控系统</h1>
+
+    <div class="container">
+        <!-- 原始数据展示区 -->
+        <div class="data-panel">
+            <h2>设备原始数据</h2>
+            <pre id="device-data"></pre>
+        </div>
+
+        <!-- 图表展示区 -->
+        <div class="chart-panel">
+            <h2>设备数值实时趋势</h2>
+            <!-- 球磨机功率折线图 -->
+            <div id="power-chart" class="chart"></div>
+            <!-- 泵池液位+给矿压力柱状图 -->
+            <div id="level-pressure-chart" class="chart"></div>
+        </div>
+    </div>
+
+    <script>
+        // ---------------------- 初始化ECharts实例 ----------------------
+        // 1. 球磨机功率折线图
+        const powerChart = echarts.init(document.getElementById('power-chart'));
+        const powerOption = {
+            title: { text: '球磨机功率 (power)' },
+            tooltip: { trigger: 'axis' },
+            legend: { data: ['功率值'] },
+            xAxis: {
+                type: 'category',
+                data: [],  // X轴：时间戳
+                axisLabel: { rotate: 30 }
+            },
+            yAxis: {
+                type: 'value',
+                min: 4000,
+                max: 4500
+            },
+            series: [{
+                name: '功率值',
+                type: 'line',
+                data: [],  // Y轴：功率值
+                smooth: true
+            }]
+        };
+        powerChart.setOption(powerOption);
+
+        // 2. 泵池液位+给矿压力柱状图
+        const mixChart = echarts.init(document.getElementById('level-pressure-chart'));
+        const mixOption = {
+            title: { text: '泵池液位 & 给矿压力' },
+            tooltip: { trigger: 'axis' },
+            legend: { data: ['泵池液位', '给矿压力'] },
+            xAxis: {
+                type: 'category',
+                data: [],  // X轴：时间戳
+                axisLabel: { rotate: 30 }
+            },
+            yAxis: [
+                {   // 液位轴
+                    type: 'value',
+                    name: '液位(%)',
+                    min: 0,
+                    max: 100
+                },
+                {   // 压力轴
+                    type: 'value',
+                    name: '压力(MPa)',
+                    min: 0,
+                    max: 1,
+                    position: 'right'
+                }
+            ],
+            series: [
+                {
+                    name: '泵池液位',
+                    type: 'bar',
+                    yAxisIndex: 0,
+                    data: []
+                },
+                {
+                    name: '给矿压力',
+                    type: 'bar',
+                    yAxisIndex: 1,
+                    data: []
+                }
+            ]
+        };
+        mixChart.setOption(mixOption);
+
+        // ---------------------- 限制图表数据长度（避免卡顿） ----------------------
+        const MAX_DATA_LENGTH = 15;  // 最多显示15个数据点
+        function trimData(arr) {
+            if (arr.length > MAX_DATA_LENGTH) {
+                arr.shift();  // 删除第一个元素
+            }
+        }
+
+        // ---------------------- 连接SSE实时数据 ----------------------
+        const eventSource = new EventSource("http://localhost:8000/api/device/realtime");
+
+        // 监听实时消息
+        eventSource.onmessage = function (event) {
+            const data = JSON.parse(event.data);
+            // 1. 展示原始数据
+            document.getElementById('device-data').textContent = JSON.stringify(data, null, 2);
+
+            // 2. 提取各设备数据
+            const powerDevice = data.find(item => item.field === 'power');  // 球磨机
+            const levelDevice = data.find(item => item.field === 'level');  // 泵池
+            const pressureDevice = data.find(item => item.field === 'pressure');  // 给矿
+            const currentTime = new Date().toLocaleTimeString();  // 当前时间（时分秒）
+
+            // 3. 更新球磨机功率折线图
+            powerOption.xAxis.data.push(currentTime);
+            powerOption.series[0].data.push(powerDevice.value);
+            trimData(powerOption.xAxis.data);
+            trimData(powerOption.series[0].data);
+            powerChart.setOption(powerOption);
+
+            // 4. 更新泵池液位+给矿压力柱状图
+            mixOption.xAxis.data.push(currentTime);
+            mixOption.series[0].data.push(levelDevice.value);
+            mixOption.series[1].data.push(pressureDevice.value);
+            trimData(mixOption.xAxis.data);
+            trimData(mixOption.series[0].data);
+            trimData(mixOption.series[1].data);
+            mixChart.setOption(mixOption);
+        };
+
+        // 监听SSE错误
+        eventSource.onerror = function (error) {
+            console.error("SSE连接错误：", error);
+            eventSource.close();  // 关闭连接
+            alert("实时数据连接失败，请刷新页面重试！");
+        };
+    </script>
+</body>
+</html>
